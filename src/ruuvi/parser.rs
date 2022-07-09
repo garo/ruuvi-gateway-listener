@@ -42,7 +42,35 @@ impl RuuviData {
     }
 }
 
-pub fn ruuvi_decode_v5(buf : &Vec<u8>) -> RuuviData {
+trait RuuviSink {
+    fn sink(&mut self, measurement : RuuviData);
+}
+
+//pub fn decode_ble_ruuvi(buf : &[u8], sink : &mut Box<dyn RuuviSink>) -> bool {
+pub fn decode_ble_ruuvi(buf : &[u8], sink : &mut dyn RuuviSink) -> bool {
+
+    let _data_length = buf[3];
+    let data_type = buf[4]; // 0xFF for manufacturer specific data
+    if data_type != 0xFF {
+        return false;
+    }
+
+    if buf[5] != 0x99 || buf[6] != 0x04 {
+        // Manufacturer id was not for Ruuvi Ltd's 0x0499
+        return false;
+    }
+
+    // Ruuvi protocol version 3
+    if buf[7] == 0x03 {
+        let measurement = ruuvi_decode_v3(&buf[7..]);
+        sink.sink(measurement);
+        return true;
+    }
+
+    return false;
+}
+
+pub fn ruuvi_decode_v5(buf : &[u8]) -> RuuviData {
 
     let mut data : RuuviData = RuuviData::new();
 
@@ -67,7 +95,7 @@ pub fn ruuvi_decode_v5(buf : &Vec<u8>) -> RuuviData {
     return data;
 }
 
-pub fn ruuvi_decode_v3(buf : &Vec<u8>) -> RuuviData {
+pub fn ruuvi_decode_v3(buf : &[u8]) -> RuuviData {
 
     let mut data : RuuviData = RuuviData::new();
 
@@ -107,6 +135,43 @@ mod tests {
             .collect()
     }
 
+    struct RuuviTestSink {
+        measurement : Option<RuuviData>,
+    }
+
+    impl RuuviSink for RuuviTestSink {
+        fn sink(&mut self, measurement : RuuviData) {
+            self.measurement = Some(measurement);
+        }
+    }
+
+    #[test]
+    fn test_ruuvi_ble_packet_decoding_1() {
+        let s = decode_hex("02010611FF9904035D1929C6670029FFEA041B0B6B").unwrap();
+
+        //let mut test_sink = Box::new(RuuviTestSink{measurement:None});
+        let mut test_sink = RuuviTestSink{measurement:None};
+
+        assert_eq!(true, decode_ble_ruuvi(&s[..], &mut test_sink));
+        assert_eq!(3, test_sink.measurement.as_ref().unwrap().format);
+        assert_eq!(25.41, test_sink.measurement.as_ref().unwrap().temperature);
+        assert_eq!(100791, test_sink.measurement.as_ref().unwrap().pressure);
+    }
+
+    #[test]
+    fn test_ruuvi_ble_packet_decoding_2() {
+        let s = decode_hex("02010611FF9904035D1929C6670029FFEA041B0B6B").unwrap();
+
+        //let mut test_sink = Box::new(RuuviTestSink{measurement:None});
+        let mut test_sink = RuuviTestSink{measurement:None};
+
+        assert_eq!(true, decode_ble_ruuvi(&s[..], &mut test_sink));
+        assert_eq!(3, test_sink.measurement.as_ref().unwrap().format);
+        assert_eq!(25.41, test_sink.measurement.as_ref().unwrap().temperature);
+        assert_eq!(100791, test_sink.measurement.as_ref().unwrap().pressure);
+    }
+
+
     #[test]
     fn it_works() {
         let result = 2 + 2;
@@ -123,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_ruuvi_decode_v5() {
-        let s = decode_hex("0512FC5394C37C0004FFFC040CAC364200CDCBB8334C884F");
+        let s = decode_hex("0512FC5394C37C0004FFFC040CAC364200CDCBB8334C884F").unwrap();
         /* Taken from https://docs.ruuvi.com/communication/bluetooth-advertisements/data-format-5-rawv2
             Data format: 5
             Temperature: 24.3 C
@@ -139,7 +204,7 @@ mod tests {
             MAC: CB B8 33 4C 88 4F
         */
 
-        let data = ruuvi_decode_v5(&s.unwrap());
+        let data = ruuvi_decode_v5(&s[..]);
 
         assert_eq!(data.format, 5);
         assert_approx_eq!(data.temperature, 24.3, 1e-5);
@@ -164,11 +229,11 @@ mod tests {
 
     #[test]
     fn test_ruuvi_decode_v5_maximum_values() {
-        let s = decode_hex("057FFFFFFEFFFE7FFF7FFF7FFFFFDEFEFFFECBB8334C884F");
+        let s = decode_hex("057FFFFFFEFFFE7FFF7FFF7FFFFFDEFEFFFECBB8334C884F").unwrap();
         /* Taken from https://docs.ruuvi.com/communication/bluetooth-advertisements/data-format-5-rawv2
         */
 
-        let data = ruuvi_decode_v5(&s.unwrap());
+        let data = ruuvi_decode_v5(&s[..]);
 
         assert_eq!(data.format, 5);
         assert_approx_eq!(data.temperature, 163.835, 1e-4);
@@ -193,11 +258,11 @@ mod tests {
 
     #[test]
     fn test_ruuvi_decode_v5_minimum_values() {
-        let s = decode_hex("058001000000008001800180010000000000CBB8334C884F");
+        let s = decode_hex("058001000000008001800180010000000000CBB8334C884F").unwrap();
         /* Taken from https://docs.ruuvi.com/communication/bluetooth-advertisements/data-format-5-rawv2
         */
 
-        let data = ruuvi_decode_v5(&s.unwrap());
+        let data = ruuvi_decode_v5(&s[..]);
 
         assert_eq!(data.format, 5);
         assert_approx_eq!(data.temperature, -163.835, 1e-4);
@@ -222,11 +287,11 @@ mod tests {
 
     #[test]
     fn test_ruuvi_decode_v3() {
-        let s = decode_hex("03291A1ECE1EFC18F94202CA0B53");
+        let s = decode_hex("03291A1ECE1EFC18F94202CA0B53").unwrap();
         /* Taken from https://docs.ruuvi.com/communication/bluetooth-advertisements/data-format-3-rawv1
         */
 
-        let data = ruuvi_decode_v3(&s.unwrap());
+        let data = ruuvi_decode_v3(&s[..]);
 
         assert_eq!(data.format, 3);
         assert_approx_eq!(data.humidity, 20.5, 1e-4);
@@ -241,11 +306,11 @@ mod tests {
 
     #[test]
     fn test_ruuvi_decode_v3_minimum_values() {
-        let s = decode_hex("0300FF6300008001800180010000");
+        let s = decode_hex("0300FF6300008001800180010000").unwrap();
         /* Taken from https://docs.ruuvi.com/communication/bluetooth-advertisements/data-format-3-rawv1
         */
 
-        let data = ruuvi_decode_v3(&s.unwrap());
+        let data = ruuvi_decode_v3(&s[..]);
 
         assert_eq!(data.format, 3);
         assert_approx_eq!(data.humidity, 0.0, 1e-4);
@@ -259,11 +324,11 @@ mod tests {
 
     #[test]
     fn test_ruuvi_decode_v3_maximum_values() {
-        let s = decode_hex("03FF7F63FFFF7FFF7FFF7FFFFFFF");
+        let s = decode_hex("03FF7F63FFFF7FFF7FFF7FFFFFFF").unwrap();
         /* Taken from https://docs.ruuvi.com/communication/bluetooth-advertisements/data-format-3-rawv1
         */
 
-        let data = ruuvi_decode_v3(&s.unwrap());
+        let data = ruuvi_decode_v3(&s[..]);
 
         assert_eq!(data.format, 3);
         assert_approx_eq!(data.humidity, 127.5, 1e-4);
