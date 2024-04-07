@@ -1,19 +1,20 @@
 use std::{num::ParseIntError};
 
+#[derive(Debug)]
 pub struct RuuviData {
 
-    format: u8,
-    temperature: f32,
-    pressure: u32,
-    humidity: f32,
-    acceleration_x: f32,
-    acceleration_y: f32,
-    acceleration_z: f32,
-    tx_power: i16,
-    voltage: f32,
-    movement: u8,
-    measurement_sequence: u32,
-    mac: [u8; 6],
+    pub format: u8,
+    pub temperature: f32,
+    pub pressure: u32,
+    pub humidity: f32,
+    pub acceleration_x: f32,
+    pub acceleration_y: f32,
+    pub acceleration_z: f32,
+    pub tx_power: i16,
+    pub voltage: f32,
+    pub movement: u8,
+    pub measurement_sequence: u32,
+    pub mac: [u8; 6],
     // mac
 }
 
@@ -42,29 +43,50 @@ impl RuuviData {
     }
 }
 
-trait RuuviSink {
-    fn sink(&mut self, measurement : RuuviData);
+pub trait RuuviSink {
+    fn sink(&mut self, source_mac : &str, measurement : RuuviData);
+}
+
+// Takes a string such as "AABB" and returns Vec with AA and BB
+fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+        .collect()
+}
+
+pub fn decode_ble_ruuvi_str(s : &str, source_mac : &str, sink : &mut dyn RuuviSink) -> bool {
+    let buf = decode_hex(s).unwrap();
+    decode_ble_ruuvi(&buf[..], &source_mac, sink)
 }
 
 //pub fn decode_ble_ruuvi(buf : &[u8], sink : &mut Box<dyn RuuviSink>) -> bool {
-pub fn decode_ble_ruuvi(buf : &[u8], sink : &mut dyn RuuviSink) -> bool {
+pub fn decode_ble_ruuvi(buf : &[u8], source_mac : &str, sink : &mut dyn RuuviSink) -> bool {
 
     let _data_length = buf[3];
     let data_type = buf[4]; // 0xFF for manufacturer specific data
     if data_type != 0xFF {
+        println!("ERR, data type not FF but {:x}", data_type);
         return false;
     }
-
+    
     if buf[5] != 0x99 || buf[6] != 0x04 {
         // Manufacturer id was not for Ruuvi Ltd's 0x0499
+        println!("ERR, Manufacturer id was not for Ruuvi Ltd's 0x0499 but {:x}{:x}", buf[5], buf[6]);
         return false;
     }
-
+    
     // Ruuvi protocol version 3
     if buf[7] == 0x03 {
         let measurement = ruuvi_decode_v3(&buf[7..]);
-        sink.sink(measurement);
+        sink.sink(source_mac, measurement);
         return true;
+    } else if buf[7] == 0x05 {
+        let measurement = ruuvi_decode_v5(&buf[7..]);
+        sink.sink(source_mac, measurement);
+        return true;
+    } else {
+        println!("ERR, Unknown ruuvi protocol version {:x}", buf[7]);
     }
 
     return false;
@@ -127,20 +149,13 @@ pub fn ruuvi_decode_v3(buf : &[u8]) -> RuuviData {
 mod tests {
     use super::*;
 
-    // Takes a string such as "AABB" and returns Vec with AA and BB
-    fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
-            .collect()
-    }
 
     struct RuuviTestSink {
         measurement : Option<RuuviData>,
     }
 
     impl RuuviSink for RuuviTestSink {
-        fn sink(&mut self, measurement : RuuviData) {
+        fn sink(&mut self, source_mac : &str, measurement : RuuviData) {
             self.measurement = Some(measurement);
         }
     }
@@ -152,7 +167,7 @@ mod tests {
         //let mut test_sink = Box::new(RuuviTestSink{measurement:None});
         let mut test_sink = RuuviTestSink{measurement:None};
 
-        assert_eq!(true, decode_ble_ruuvi(&s[..], &mut test_sink));
+        assert_eq!(true, decode_ble_ruuvi(&s[..], "", &mut test_sink));
         assert_eq!(3, test_sink.measurement.as_ref().unwrap().format);
         assert_eq!(25.41, test_sink.measurement.as_ref().unwrap().temperature);
         assert_eq!(100791, test_sink.measurement.as_ref().unwrap().pressure);
@@ -165,7 +180,7 @@ mod tests {
         //let mut test_sink = Box::new(RuuviTestSink{measurement:None});
         let mut test_sink = RuuviTestSink{measurement:None};
 
-        assert_eq!(true, decode_ble_ruuvi(&s[..], &mut test_sink));
+        assert_eq!(true, decode_ble_ruuvi(&s[..], "", &mut test_sink));
         assert_eq!(3, test_sink.measurement.as_ref().unwrap().format);
         assert_eq!(25.41, test_sink.measurement.as_ref().unwrap().temperature);
         assert_eq!(100791, test_sink.measurement.as_ref().unwrap().pressure);
